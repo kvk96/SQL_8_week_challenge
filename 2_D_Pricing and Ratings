@@ -1,0 +1,129 @@
+–1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes - how much money has Pizza Runner made so far if there are no delivery fees? 
+SELECT t1.runner_id,
+    sum(
+        CASE
+            WHEN pn.pizza_name = 'Meatlovers'::text THEN 12
+            ELSE 10
+        END) AS pizza_cost
+   FROM ( SELECT co.order_id,
+            co.customer_id,
+            co.pizza_id,
+            co.exclusions,
+            co.extras,
+            co.order_time,
+            ro.runner_id
+           FROM pizza_runner.customer_orders co
+             JOIN ( SELECT runner_orders.order_id,
+                    runner_orders.runner_id
+                   FROM pizza_runner.runner_orders
+                  WHERE runner_orders.cancellation::text = '') ro ON co.order_id = ro.order_id) t1
+     LEFT JOIN pizza_runner.pizza_names pn ON pn.pizza_id = t1.pizza_id
+  GROUP BY t1.runner_id
+  ORDER BY t1.runner_id;
+
+–2. What if there was an additional $1 charge for any pizza extras?
+       Add cheese is $1 extra
+
+select t2.runner_id,
+		sum(
+			(case when t1.pizza_name = 'Meatlovers' then 12 else 10 end)+
+			(case when t1.extras like '%Cheese%' then 1 else 0 end)) as pizza_cost
+ from customer_orders_modified as t1
+join (select * from runner_orders where cancellation = '') t2 on t1.order_id = t2.order_id
+
+group by t2.runner_id
+
+–3. The Pizza Runner team now wants to add an additional ratings system that allows
+customers to rate their runner, how would you design an additional table for this new dataset 
+generate a schema for this new table and insert your own data for ratings for each successful
+customer order between 1to 5.
+
+drop table runner_ratings;
+CREATE TABLE runner_ratings (
+    order_id INTEGER,
+    rating INTEGER CONSTRAINT check1to5_rating CHECK (
+        rating between 1 and 5
+    ),
+    comment VARCHAR(150)
+);
+INSERT INTO runner_ratings (order_id, rating, comment)
+VALUES (1, 2, 'Tasty'),
+    (2, 4, null),
+    (3, 4, null),
+    ( 4,5,'The pizza arrived cold, really bad service'),
+    (5, 2, ''),
+    (6, 3, null),
+    (7, 5, null),
+    (8, 4, 'Great service'),
+    (9, 3, null),
+    (10,1,'The pizza arrived upside down, really disappointed');
+
+
+--4. Using your newly generated table - can you join all of the information together to form a table which has the following information for successful deliveries?
+customer_id
+order_id
+runner_id
+rating
+order_time
+pickup_time
+Time between order and pickup
+Delivery duration
+Average speed
+Total number of pizzas
+
+SELECT DISTINCT co.customer_id,
+    co.order_id,
+    ro.runner_id,
+    rr.rating,
+    co.order_time,
+    ro.pickup_time,
+    ro.pickup_time - co.order_time AS time_btw_order_n_pickup,
+    ro.duration,
+    avg(ro.distance / ro.duration::double precision * 60::double precision) OVER (PARTITION BY ro.runner_id)::numeric(10,3) AS avgerage_speed,
+    count(co.pizza_id) OVER (PARTITION BY co.order_id) AS total_pizzas
+   FROM pizza_runner.customer_orders co
+     LEFT JOIN ( SELECT runner_ratings.order_id,
+            runner_ratings.rating
+           FROM pizza_runner.runner_ratings) rr ON co.order_id = rr.order_id
+     LEFT JOIN ( SELECT runner_orders.order_id,
+            runner_orders.runner_id,
+            runner_orders.pickup_time,
+            runner_orders.distance,
+            runner_orders.duration
+           FROM pizza_runner.runner_orders) ro ON ro.order_id = co.order_id
+
+--5. If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and 
+each runner is paid $0.30 per kilometre traveled - how much money does Pizza Runner have 
+left over after these deliveries?
+
+WITH tab1 AS (
+         SELECT ro.runner_id,
+            pn.pizza_name,
+            sum(
+                CASE
+                    WHEN pn.pizza_name = 'Meatlovers'::text THEN 12::double precision + ro.distance_money
+                    ELSE 10::double precision + ro.distance_money
+                END)::numeric(10,2) AS total_earnings,
+            count(pn.pizza_name) AS total_pizzas
+           FROM ( SELECT runner_orders.distance * 0.3::double precision AS distance_money,
+                    runner_orders.order_id,
+                    runner_orders.runner_id
+                   FROM pizza_runner.runner_orders
+                  WHERE runner_orders.cancellation::text = ''::text) ro
+             LEFT JOIN pizza_runner.customer_orders co ON co.order_id = ro.order_id
+             LEFT JOIN pizza_runner.pizza_names pn ON pn.pizza_id = co.pizza_id
+          GROUP BY ro.runner_id, pn.pizza_name
+        )
+ SELECT tab1.runner_id,
+    sum(
+        CASE
+            WHEN tab1.pizza_name = 'Meatlovers'::text THEN tab1.total_earnings - (12 * tab1.total_pizzas)::numeric
+            ELSE tab1.total_earnings - (10 * tab1.total_pizzas)::numeric
+        END) AS total_earnings
+   FROM tab1
+  GROUP BY tab1.runner_id
+  ORDER BY (sum(
+        CASE
+            WHEN tab1.pizza_name = 'Meatlovers'::text THEN tab1.total_earnings - (12 * tab1.total_pizzas)::numeric
+            ELSE tab1.total_earnings - (10 * tab1.total_pizzas)::numeric
+        END)) DESC
