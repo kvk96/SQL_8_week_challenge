@@ -1,0 +1,86 @@
+--1.How many pizzas were ordered?
+
+SELECT count(*) as Total_orders FROM customer_orders;
+
+--2.How many unique customer orders were made?
+
+SELECT count( distinct customer_id) as Total_customers 
+FROM customer_orders;
+
+--3.How many successful orders were delivered by each runner?
+
+select runner_id,count(*) as suc_del from runner_orders
+where duration is not null
+group by runner_id;
+
+--4.How many of each type of pizza was delivered?
+
+select t3.pizza_name,count(t2.duration) as "total_pizza_del"
+from (select pizza_id,order_id from customer_orders) as t1
+join (select order_id,duration from runner_orders where duration is not null) as t2
+on t1.order_id = t2.order_id
+join pizza_names as t3
+on t1.pizza_id = t3.pizza_id
+group by t3.pizza_name
+order by "total_pizza_del" desc;
+
+--5.How many Vegetarian and Meatlovers were ordered by each customer?
+
+select t1.customer_id,t2.pizza_name,count(*) as "Total_orders"
+from (select customer_id,pizza_id from customer_orders) as t1 join pizza_names as t2
+on t1.pizza_id = t2.pizza_id
+group by t1.customer_id,t2.pizza_name
+order by t1.customer_id;
+
+--6.What was the maximum number of pizzas delivered in a single order?
+
+select count(t2.duration) as "max_pizza_del_in_one_order"
+from (select pizza_id,order_id from customer_orders) as t1
+join (select order_id,duration from runner_orders where duration is not null) as t2
+on t1.order_id = t2.order_id
+group by t1.order_id
+order by "max_pizza_del_in_one_order" desc limit 1;
+
+--7.For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+
+select t1.customer_id,
+	sum(case when t1.exclusions = '' then 0 else 1 end) as "total_exclusion_count",
+	sum(case when t1.extras = '' then 0 else 1 end) as "total_extras_count"
+from customer_orders as t1
+join (select order_id,distance from runner_orders where distance is not null) as t2
+on t1.order_id = t2.order_id
+group by t1.customer_id
+order by  "total_exclusion_count","total_extras_count"
+
+--8.How many pizzas were delivered that had both exclusions and extras?
+
+select count(*) as pizza_has_extra_exclus_del
+from (select * from customer_orders where exclusions != '' and extras != '') as t1
+join (select * from runner_orders where distance is not null) as t2 on
+t1.order_id = t2.order_id
+
+--9.What was the total volume of pizzas ordered for each hour of the day?
+
+select extract(hour from order_time) as "hour_of_day",
+		count(*) as "order_count" 
+from customer_orders
+group by "hour_of_day"
+order by "order_count" desc;
+
+--10.What was the volume of orders for each day of the week?
+
+select
+case
+when extract(dow from order_time) = 0 then 'Sunday'
+when extract(dow from order_time) = 1 then 'Monday'
+when extract(dow from order_time) = 2 then 'Tuesday'
+when extract(dow from order_time) = 3 then 'Wednesday'
+when extract(dow from order_time) = 4 then 'Thursday'
+when extract(dow from order_time) = 5 then 'Friday'
+when extract(dow from order_time) = 6 then 'Saturday'
+end
+as "day_of_week",
+count(*) as "total_orders"
+from customer_orders
+group by "day_of_week"
+order by "total_orders" desc
