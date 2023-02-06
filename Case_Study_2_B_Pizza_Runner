@@ -1,0 +1,79 @@
+--2.B. Runner and Customer Experience
+--1.How many runners signed up for each 1 week period? (i.e. week starts 2021-01-01)
+
+select ((registration_date- date '2021-01-01')/7)+1  as "week_no",
+count(runner_id) as "Total_reg" from runners 
+group by "week_no"
+order by "Total_reg" desc
+
+--2.What was the average time in minutes it took for each runner to arrive at the Pizza Runner HQ to pickup the order?
+
+select t2.runner_id,floor(avg(date_part('minute',t2.pickup_time-t1.order_time))) as "avg_minutes"
+from customer_orders as t1 
+join (select * from runner_orders where pickup_time is not null) as t2 
+on t1.order_id = t2.order_id
+group by t2.runner_id
+order by "avg_minutes"
+
+--3.Is there any relationship between the number of pizzas and how long the order takes to prepare?
+
+with temp1 as (
+select t1.order_id,t1.order_time,t2.pickup_time,date_part('minute',t2.pickup_time-t1.order_time) as "avg_minutes"
+from customer_orders as t1 
+join (select * from runner_orders where pickup_time is not null) as t2 
+on t1.order_id = t2.order_id
+group by t1.order_id,t1.order_time,t2.pickup_time)
+select avg(avg_minutes) as avg_time_taken from temp1;
+
+--4.What was the average distance travelled for each customer?
+
+select distinct t2.customer_id, 
+cast(avg(t1.distance) over(PARTITION by t2.customer_id) as decimal(10, 2)) as Avg_Distance
+from 
+(select * from runner_orders where distance is not null) as t1
+join customer_orders as t2
+on t1.order_id = t2.order_id
+order by Avg_Distance DESC;
+
+--OR --
+
+select distinct t2.customer_id, cast(avg(t1.distance) as decimal(10, 2)) as Avg_Distance
+from 
+(select * from runner_orders where distance is not null) as t1
+join customer_orders as t2
+on t1.order_id = t2.order_id
+group by t2.customer_id
+order by Avg_Distance DESC;
+
+--5.What was the difference between the longest and shortest delivery times for all orders?
+
+select max(duration)-min(duration) as dif_log_shrt 
+from runner_orders where duration is not null;
+
+--6.What was the average speed for each runner for each delivery and do you notice any trend for these values?
+
+select order_id,runner_id,distance,duration, cast(avg(distance/duration*60) as decimal(10,2)) as speed
+	 	from runner_orders where duration is not null
+		group by order_id,runner_id,distance,duration
+		order by runner_id,speed;
+		--Average speed varies from for each runner 1 - (37.5 km/hr to 60 km/hr), 2 - (35.1 km/hr to 93.6 km/hr), 3 - (40 km/hr)
+
+--7. What is the successful delivery percentage for each runner?
+
+--(case 1 where all the rows contains null in distance for not delivered)
+select runner_id,(count(distance)*100/count(runner_id))::float4 as suc_rate
+			from runner_orders
+			group by runner_id;
+------- OR ------
+
+--(Case 2 for all cases)
+
+select t2.runner_id,
+case when t1.not_del is null then 100 else (t2.total-t1.not_del)*100/t2.total end as suc_rate
+from (select runner_id,count(cancellation)::float4 as not_del from runner_orders
+where cancellation != '' group by runner_id) as t1
+right join
+(select runner_id,count(runner_id)::float4 as total from runner_orders
+group by runner_id) as t2
+On t2.runner_id = t1.runner_id
+
