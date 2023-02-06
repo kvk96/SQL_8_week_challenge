@@ -1,0 +1,147 @@
+--1. What are the standard ingredients for each pizza?
+
+SELECT t3.pizza_name,
+string_agg(t2.topping_name, ','::text) AS topping_name
+FROM pizza_runner.pizza_recipes_trans t1
+LEFT JOIN pizza_runner.pizza_toppings t2 ON t1.toppings = t2.topping_id
+LEFT JOIN pizza_runner.pizza_names t3 on t1.pizza_id = t3.pizza_id
+GROUP BY t3.pizza_name;
+
+--2. What was the most commonly added extra?
+
+SELECT pt.topping_name AS mostly_used_extras
+FROM pizza_runner.pizza_toppings pt
+JOIN ( SELECT t2.extras::integer AS extras
+         FROM ( SELECT customer_orders.extras
+                FROM pizza_runner.customer_orders
+                WHERE customer_orders.extras::text <> ''::text) t1
+LEFT JOIN LATERAL unnest(string_to_array(t1.extras::text, ','::text)) WITH ORDINALITY t2(extras)
+	   	ON true
+          GROUP BY t2.extras
+          ORDER BY (count(*)) DESC
+         LIMIT 1) et
+ON pt.topping_id = et.extras;
+
+--3. What was the most common exclusion?
+
+SELECT pt.topping_name AS mostly_used_exclusions
+FROM pizza_runner.pizza_toppings pt
+JOIN ( SELECT t2.exclusions::integer AS exclusions
+         FROM ( SELECT customer_orders.exclusions
+                FROM pizza_runner.customer_orders
+                WHERE customer_orders.exclusions::text <> ''::text) t1
+          LEFT JOIN LATERAL unnest(string_to_array(t1.exclusions::text, ','::text)) WITH ORDINALITY t2(exclusions)
+	   	ON true
+          GROUP BY t2.exclusions
+          ORDER BY (count(*)) DESC
+         LIMIT 1) et
+ON pt.topping_id = et.exclusions;
+
+–4. Generate an order item for each record in the customers_orders table in the format of one of the following:
+Meat Lovers
+Meat Lovers - Exclude Beef
+Meat Lovers - Extra Bacon
+Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers
+
+with first_tab as (
+SELECT t1.order_id,
+    t1.customer_id,
+    t5.pizza_name,
+    t1.order_time,
+    string_agg(t3.topping_name, ','::text) AS exclusions,
+    string_agg(t4.topping_name, ','::text) AS extras
+
+   FROM ( SELECT DISTINCT * FROM pizza_runner.customer_orders) t1
+   LEFT JOIN LATERAL UNNEST(string_to_array(t1.exclusions::text, ','::text), string_to_array(t1.extras::text, ','::text)) WITH ORDINALITY t2(exclusions, extras) ON true
+   LEFT JOIN pizza_runner.pizza_toppings t3 ON t3.topping_id = t2.exclusions::integer
+   LEFT JOIN pizza_runner.pizza_toppings t4 ON t4.topping_id = t2.extras::integer
+   LEFT JOIN pizza_runner.pizza_names t5 on t1.pizza_id = t5.pizza_id
+  GROUP BY t1.order_id, t1.customer_id, t1.order_time,t5.pizza_name
+  ORDER BY t1.order_time, t1.order_id)
+  select *, concat(pizza_name,case
+					when exclusions is not NULL
+					then concat(' - Exclude  ',exclusions)
+					 else '' end,
+					case
+					when extras != '' 
+					then concat(' - Extra  ',extras)
+					else '' end) as combined
+from first_tab;
+  
+–5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
+For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+
+WITH tab1 AS (
+         SELECT *,
+            split_part(final_table_mod.exclusions, ',', 1) AS exc1,
+            split_part(final_table_mod.exclusions, ',', 2) AS exc2,
+            split_part(final_table_mod.extras, ',', 1) AS ext1,
+            split_part(final_table_mod.extras, ',', 2) AS ext2
+           FROM pizza_runner.final_table_mod
+        ), tab2 AS (
+         SELECT tab1.order_id,
+            tab1.customer_id,
+            tab1.runner_id,
+            tab1.registration_date,
+            tab1.order_time,
+            tab1.pizza_name,
+            tab1.ext1,
+            tab1.ext2,
+                CASE
+                    WHEN tab1.exc1 IS NOT NULL THEN
+                    CASE
+                        WHEN tab1.exc2 !='' THEN replace(replace(tab1.topping_name, concat(tab1.exc1, ','), ''), concat(tab1.exc2, ','), '')
+                        ELSE replace(tab1.topping_name, concat(tab1.exc1, ','), ''::text)
+                    END
+                    ELSE tab1.topping_name
+                END AS topping_name
+           FROM tab1
+        )
+ SELECT tab2.order_id,
+    tab2.customer_id,
+    tab2.runner_id,
+    tab2.registration_date,
+    tab2.order_time,
+    tab2.pizza_name,
+        CASE
+            WHEN tab2.ext1 IS NULL THEN tab2.topping_name
+            ELSE
+            CASE
+                WHEN tab2.ext2 IS NULL THEN replace(tab2.topping_name, tab2.ext1, concat('2X', tab2.ext1))
+                ELSE replace(replace(tab2.topping_name, tab2.ext1, concat('2X', tab2.ext1)), tab2.ext2, concat('2 X ', tab2.ext2))
+            END
+        END AS topping_name
+   FROM tab2;
+
+–6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+
+WITH tab1 AS (
+         SELECT t1.pizza_id,
+                CASE
+                    WHEN t1.extras IS NOT NULL THEN concat(t1.extras, ',', t3.topping_name)
+                    ELSE t3.topping_name
+                END AS topping_name,
+            split_part(t1.exclusions, ','::text, 1) AS exc1,
+            split_part(t1.exclusions, ','::text, 2) AS exc2
+           FROM pizza_runner.customer_orders_modified t1
+             JOIN ( SELECT * FROM pizza_runner.runner_orders
+                 		 WHERE runner_orders.cancellation::text = '') t2 ON t1.order_id = t2.order_id
+             JOIN pizza_runner.pizza_recipes_trans t3 ON t3.pizza_id = t1.pizza_id), 
+	tab2 AS (
+         SELECT tab1.pizza_id,
+                CASE
+                    WHEN tab1.exc1 IS NOT NULL THEN
+                    CASE
+                        WHEN tab1.exc2 <> ''::text THEN replace(replace(tab1.topping_name, concat(tab1.exc1, ','), ''::text), concat(tab1.exc2, ','), ''::text)
+                        ELSE replace(tab1.topping_name, concat(tab1.exc1, ','), ''::text)
+                    END
+                    ELSE tab1.topping_name
+                END AS topping_name
+           FROM tab1 )
+
+ SELECT unnest(string_to_array(tab2.topping_name, ','::text)) AS topping_name,
+    count(*) AS total_count
+   FROM tab2
+  GROUP BY (unnest(string_to_array(tab2.topping_name, ','::text)))
+  ORDER BY (count(*)) DESC
+
